@@ -1,0 +1,86 @@
+version: 2
+
+jobs:
+  test:
+    # Change working directory so that mson-server scripts have reference back to mson
+    working_directory: ~/mson-react
+
+    docker:
+      - image: circleci/node:stretch-browsers
+
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+          - dependencies-v3-{{ checksum "package.json" }}
+          - dependencies-v3-
+      - run: yarn install
+      - save_cache:
+          paths:
+            - node_modules
+          key: dependencies-v3-{{ checksum "package.json" }}
+
+      # Test against main so that we can develop new features without building a new MSON release
+      # - run: git clone https://github.com/redgeoff/mson ../mson
+      # - restore_cache:
+      #     keys:
+      #     - mson-dependencies-v3-{{ checksum "package.json" }}
+      #     - mson-dependencies-v3-
+      # - run: cd ../mson && yarn install && yarn compile && yarn link
+      # - save_cache:
+      #     paths:
+      #       - ../mson/node_modules
+      #     key: mson-dependencies-v3-{{ checksum "package.json" }}
+      # - run: yarn link mson
+
+      - run: CI=true yarn test
+
+      # Check bundle size
+      # TODO: remove NODE_OPTIONS after https://stackoverflow.com/a/69699772/2831606 has been fixed
+      - run: export NODE_OPTIONS=--openssl-legacy-provider && yarn bundle && ./scripts/bundle-size.sh
+      # - run: yarn bundle && ./scripts/bundle-size.sh
+
+      # Sanity check compilation as compilation uses custom babel settings
+      - run: yarn compile
+
+  publish:
+    docker:
+      - image: 'circleci/node:latest'
+    steps:
+      - checkout
+      - run:
+          name: install
+          command: yarn install
+      - run:
+          name: release
+          command: npm run semantic-release || true
+
+      - add_ssh_keys:
+          fingerprints:
+            - "09:ce:0e:63:a8:64:37:97:d6:0a:86:b8:4f:4a:59:05"
+      - run:
+          name: publish pages
+          command: |
+            eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_rsa_*
+            git config --global user.email "redgeoff@gmail.com"
+            git config --global user.name "Geoff Cox"
+            yarn bundle
+            yarn deploy
+
+workflows:
+  version: 2
+  test_and_publish:
+    jobs:
+      - test:
+          filters:
+            branches:
+              ignore:
+                # Ignore gh-pages as the tests don't apply
+                - gh-pages
+
+      - publish:
+          requires:
+            - test
+          filters:
+            branches:
+              only: release
